@@ -1,0 +1,232 @@
+# Flink配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flink-config
+  namespace: bigdata
+data:
+  flink-conf.yaml: |
+    # Flink基础配置
+    jobmanager.rpc.address: flink-jobmanager
+    jobmanager.rpc.port: 6123
+    jobmanager.memory.process.size: 2048m
+    jobmanager.memory.flink.size: 1536m
+    jobmanager.memory.jvm-metaspace.size: 256m
+    jobmanager.memory.jvm-overhead.min: 128m
+    jobmanager.memory.jvm-overhead.max: 256m
+    
+    # TaskManager配置
+    taskmanager.numberOfTaskSlots: 4
+    taskmanager.memory.process.size: 4096m
+    taskmanager.memory.flink.size: 3072m
+    taskmanager.memory.managed.size: 1024m
+    taskmanager.memory.jvm-metaspace.size: 256m
+    taskmanager.memory.jvm-overhead.min: 256m
+    taskmanager.memory.jvm-overhead.max: 512m
+    
+    # 状态后端配置
+    state.backend: filesystem
+    state.checkpoints.dir: s3://bigdata-lake/checkpoints
+    state.savepoints.dir: s3://bigdata-lake/savepoints
+    state.checkpoints.num-retained: 10
+    
+    # S3配置
+    s3.endpoint: http://minio.storage.svc.cluster.local:9000
+    s3.access-key: admin
+    s3.secret-key: minio123
+    s3.path.style: "true"
+    
+    # 高可用配置
+    high-availability: zookeeper
+    high-availability.storageDir: s3://bigdata-lake/ha
+    high-availability.zookeeper.quorum: kafka-zookeeper:2181
+    
+    # 重启策略
+    restart-strategy: fixed-delay
+    restart-strategy.fixed-delay.attempts: 3
+    restart-strategy.fixed-delay.delay: 10s
+    
+    # 检查点配置
+    execution.checkpointing.interval: 30s
+    execution.checkpointing.timeout: 10min
+    execution.checkpointing.min-pause: 2s
+    execution.checkpointing.max-concurrent-checkpoints: 1
+    
+    # 网络配置
+    taskmanager.network.request-backoff.initial: 100
+    taskmanager.network.request-backoff.max: 10000
+    taskmanager.network.buffers-per-channel: 2
+    taskmanager.network.floating-buffers-per-gate: 8
+    
+    # 日志配置
+    rootLogger.level: INFO
+    logger.akka.level: WARN
+    logger.kafka.level: WARN
+    logger.hadoop.level: WARN
+    logger.zookeeper.level: WARN
+    
+    # 时区配置
+    table.local-time-zone: Asia/Shanghai
+    
+    # 并行度配置
+    parallelism.default: 2
+    
+    # 容错配置
+    execution.fail-on-non-recoverable-error: false
+    execution.retry-delay: 10s
+    execution.retry.max-attempts: 3
+    
+    # 内存配置
+    taskmanager.memory.fraction: 0.7
+    taskmanager.memory.managed.fraction: 0.4
+    
+    # 网络超时配置
+    akka.ask.timeout: 50s
+    akka.lookup.timeout: 50s
+    akka.tcp.timeout: 50s
+    akka.transport.heartbeat.interval: 10s
+    akka.transport.heartbeat.pause: 50s
+    akka.watch.heartbeat.interval: 10s
+    akka.watch.heartbeat.pause: 50s
+    
+    # 作业管理配置
+    jobmanager.archive.fs.dir: s3://bigdata-lake/job-archive
+    historyserver.archive.fs.dir: s3://bigdata-lake/job-archive
+    historyserver.archive.fs.refresh-interval: 10000
+    
+    # 安全配置
+    security.kerberos.login.use-ticket-cache: false
+    security.kerberos.login.keytab: ""
+    security.kerberos.login.principal: ""
+    
+    # 监控配置
+    metrics.reporter.prom.class: org.apache.flink.metrics.prometheus.PrometheusReporter
+    metrics.reporter.prom.port: 9249
+    metrics.reporter.prom.interval: 15s
+    
+    # 容错配置
+    execution.attached: true
+    execution.shutdown-on-attached-exit: true
+    
+    # 资源管理配置
+    kubernetes.operator.cluster.health-check.enabled: true
+    kubernetes.operator.cluster.health-check.restarts.threshold: 10
+    kubernetes.operator.cluster.health-check.restarts.window: 3600000
+    
+    # 日志聚合配置
+    kubernetes.operator.metrics.reporter.prom.enabled: true
+    kubernetes.operator.metrics.reporter.prom.port: 9249
+    
+    # 作业提交配置
+    kubernetes.operator.cluster.kubernetes.config.path: ""
+    kubernetes.operator.cluster.kubernetes.service-account: default
+    
+    # 网络配置
+    kubernetes.operator.cluster.kubernetes.pod-template-path: ""
+    kubernetes.operator.cluster.kubernetes.pod-template-configmap-name: ""
+    
+    # 存储配置
+    kubernetes.operator.cluster.kubernetes.volumes: ""
+    kubernetes.operator.cluster.kubernetes.volume-mounts: ""
+    
+    # 环境变量配置
+    kubernetes.operator.cluster.kubernetes.env: ""
+    kubernetes.operator.cluster.kubernetes.env-secret: ""
+    
+    # 资源配置
+    kubernetes.operator.cluster.kubernetes.resources.jobmanager.memory: 2048m
+    kubernetes.operator.cluster.kubernetes.resources.jobmanager.cpu: 1
+    kubernetes.operator.cluster.kubernetes.resources.taskmanager.memory: 4096m
+    kubernetes.operator.cluster.kubernetes.resources.taskmanager.cpu: 2
+    
+    # 服务配置
+    kubernetes.operator.cluster.kubernetes.service.type: ClusterIP
+    kubernetes.operator.cluster.kubernetes.service.port: 8081
+    
+    # 入口配置
+    kubernetes.operator.cluster.kubernetes.ingress.enabled: true
+    kubernetes.operator.cluster.kubernetes.ingress.class: nginx
+    kubernetes.operator.cluster.kubernetes.ingress.annotations: |
+      nginx.ingress.kubernetes.io/rewrite-target: /
+      nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    kubernetes.operator.cluster.kubernetes.ingress.host: flink.bigdata-platform.local
+    
+    # 持久化配置
+    kubernetes.operator.cluster.kubernetes.persistence.enabled: true
+    kubernetes.operator.cluster.kubernetes.persistence.storage-class: default
+    kubernetes.operator.cluster.kubernetes.persistence.size: 10Gi
+    
+    # 安全上下文配置
+    kubernetes.operator.cluster.kubernetes.security-context.run-as-user: 9999
+    kubernetes.operator.cluster.kubernetes.security-context.run-as-group: 9999
+    kubernetes.operator.cluster.kubernetes.security-context.fs-group: 9999
+    
+    # 节点选择器配置
+    kubernetes.operator.cluster.kubernetes.node-selector: ""
+    
+    # 容忍度配置
+    kubernetes.operator.cluster.kubernetes.tolerations: ""
+    
+    # 亲和性配置
+    kubernetes.operator.cluster.kubernetes.affinity: ""
+    
+    # 镜像拉取策略
+    kubernetes.operator.cluster.kubernetes.image-pull-policy: IfNotPresent
+    
+    # 镜像拉取密钥
+    kubernetes.operator.cluster.kubernetes.image-pull-secrets: ""
+    
+    # 服务账户配置
+    kubernetes.operator.cluster.kubernetes.service-account.create: true
+    kubernetes.operator.cluster.kubernetes.service-account.name: flink-service-account
+    
+    # RBAC配置
+    kubernetes.operator.cluster.kubernetes.rbac.create: true
+    kubernetes.operator.cluster.kubernetes.rbac.cluster-role: flink-cluster-role
+    kubernetes.operator.cluster.kubernetes.rbac.cluster-role-binding: flink-cluster-role-binding
+    
+    # 网络策略配置
+    kubernetes.operator.cluster.kubernetes.network-policy.create: true
+    kubernetes.operator.cluster.kubernetes.network-policy.ingress-rules: |
+      - from:
+        - namespaceSelector:
+            matchLabels:
+              name: bigdata
+        ports:
+        - protocol: TCP
+          port: 8081
+        - protocol: TCP
+          port: 6123
+        - protocol: TCP
+          port: 6124
+        - protocol: TCP
+          port: 6125
+    kubernetes.operator.cluster.kubernetes.network-policy.egress-rules: |
+      - to:
+        - namespaceSelector:
+            matchLabels:
+              name: storage
+        ports:
+        - protocol: TCP
+          port: 9000
+        - protocol: TCP
+          port: 6379
+      - to:
+        - namespaceSelector:
+            matchLabels:
+              name: bigdata
+        ports:
+        - protocol: TCP
+          port: 9092
+        - protocol: TCP
+          port: 2181
+        - protocol: TCP
+          port: 8030
+        - protocol: TCP
+          port: 8040
+      - to: []
+        ports:
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 53 

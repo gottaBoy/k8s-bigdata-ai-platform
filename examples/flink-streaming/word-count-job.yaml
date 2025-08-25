@@ -1,0 +1,226 @@
+# Flink流处理示例 - Word Count作业
+apiVersion: flink.apache.org/v1beta1
+kind: FlinkDeployment
+metadata:
+  name: word-count-job
+  namespace: bigdata
+spec:
+  image: flink:1.17.1
+  flinkVersion: v1_17
+  flinkConfiguration:
+    taskmanager.numberOfTaskSlots: "2"
+    state.backend: filesystem
+    state.checkpoints.dir: s3://bigdata-lake/checkpoints
+    state.savepoints.dir: s3://bigdata-lake/savepoints
+    s3.endpoint: http://minio.storage.svc.cluster.local:9000
+    s3.access-key: admin
+    s3.secret-key: minio123
+    s3.path.style: "true"
+    execution.checkpointing.interval: 30s
+    execution.checkpointing.timeout: 10min
+    execution.checkpointing.min-pause: 2s
+    execution.checkpointing.max-concurrent-checkpoints: 1
+    parallelism.default: 2
+    table.local-time-zone: Asia/Shanghai
+  jobManager:
+    resource:
+      memory: "1024m"
+      cpu: 0.5
+    replicas: 1
+  taskManager:
+    resource:
+      memory: "2048m"
+      cpu: 1
+    replicas: 2
+  job:
+    jarURI: local:///opt/flink/examples/streaming/WordCount.jar
+    entryClass: org.apache.flink.streaming.examples.wordcount.WordCount
+    args: ["--input", "kafka://kafka:9092", "--output", "s3://bigdata-lake/word-count-output"]
+    parallelism: 2
+    upgradeMode: stateless
+  podTemplate:
+    spec:
+      containers:
+      - name: flink-main-container
+        env:
+        - name: TZ
+          value: "Asia/Shanghai"
+        - name: FLINK_ENV_JAVA_OPTS
+          value: "-Dfile.encoding=UTF-8"
+---
+# Kafka数据源配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: word-count-kafka-source
+  namespace: bigdata
+data:
+  kafka-source.sql: |
+    CREATE TABLE word_count_source (
+      word STRING,
+      count BIGINT,
+      ts TIMESTAMP(3)
+    ) WITH (
+      'connector' = 'kafka',
+      'topic' = 'word-count-input',
+      'properties.bootstrap.servers' = 'kafka:9092',
+      'properties.group.id' = 'word-count-group',
+      'scan.startup.mode' = 'latest-offset',
+      'format' = 'json'
+    );
+    
+    CREATE TABLE word_count_sink (
+      word STRING,
+      count BIGINT,
+      window_start TIMESTAMP(3),
+      window_end TIMESTAMP(3)
+    ) WITH (
+      'connector' = 'filesystem',
+      'path' = 's3://bigdata-lake/word-count-output',
+      'format' = 'parquet',
+      'sink.partition-commit.delay' = '1 min',
+      'sink.partition-commit.policy.kind' = 'success-file'
+    );
+    
+    INSERT INTO word_count_sink
+    SELECT 
+      word,
+      COUNT(*) as count,
+      TUMBLE_START(ts, INTERVAL '1' MINUTE) as window_start,
+      TUMBLE_END(ts, INTERVAL '1' MINUTE) as window_end
+    FROM word_count_source
+    GROUP BY TUMBLE(ts, INTERVAL '1' MINUTE), word;
+---
+# 数据生成器
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: word-count-data-generator
+  namespace: bigdata
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: word-count-data-generator
+  template:
+    metadata:
+      labels:
+        app: word-count-data-generator
+    spec:
+      containers:
+      - name: data-generator
+        image: confluentinc/cp-kafka:7.4.0
+        command:
+        - /bin/bash
+        - -c
+        - |
+          # 等待Kafka就绪
+          echo "Waiting for Kafka to be ready..."
+          while ! kafka-topics --bootstrap-server kafka:9092 --list; do
+            sleep 5
+          done
+          
+          # 创建主题
+          kafka-topics --bootstrap-server kafka:9092 --create --topic word-count-input --partitions 3 --replication-factor 3
+          
+          # 生成测试数据
+          echo "Generating test data..."
+          while true; do
+            echo '{"word":"hello","count":1,"ts":"'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"}' | kafka-console-producer --bootstrap-server kafka:9092 --topic word-count-input
+            echo '{"word":"world","count":1,"ts":"'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"}' | kafka-console-producer --bootstrap-server kafka:9092 --topic word-count-input
+            echo '{"word":"flink","count":1,"ts":"'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"}' | kafka-console-producer --bootstrap-server kafka:9092 --topic word-count-input
+            echo '{"word":"streaming","count":1,"ts":"'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'"}' | kafka-console-producer --bootstrap-server kafka:9092 --topic word-count-input
+            sleep 10
+          done
+        env:
+        - name: KAFKA_OPTS
+          value: "-Djava.security.auth.login.config=/etc/kafka/kafka_client_jaas.conf"
+        volumeMounts:
+        - name: kafka-config
+          mountPath: /etc/kafka
+      volumes:
+      - name: kafka-config
+        configMap:
+          name: kafka-client-config
+---
+# Kafka客户端配置
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-client-config
+  namespace: bigdata
+data:
+  kafka_client_jaas.conf: |
+    KafkaClient {
+      org.apache.kafka.common.security.plain.PlainLoginModule required
+      username="admin"
+      password="admin-secret";
+    };
+---
+# 监控配置
+apiVersion: v1
+kind: Service
+metadata:
+  name: word-count-job-metrics
+  namespace: bigdata
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9249"
+    prometheus.io/path: "/metrics"
+spec:
+  selector:
+    app: word-count-job
+  ports:
+  - name: metrics
+    port: 9249
+    targetPort: 9249
+  type: ClusterIP
+---
+# 网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: word-count-job-network-policy
+  namespace: bigdata
+spec:
+  podSelector:
+    matchLabels:
+      app: word-count-job
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: bigdata
+    ports:
+    - protocol: TCP
+      port: 8081
+    - protocol: TCP
+      port: 6123
+    - protocol: TCP
+      port: 9249
+  egress:
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: storage
+    ports:
+    - protocol: TCP
+      port: 9000
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: bigdata
+    ports:
+    - protocol: TCP
+      port: 9092
+    - protocol: TCP
+      port: 2181
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53 

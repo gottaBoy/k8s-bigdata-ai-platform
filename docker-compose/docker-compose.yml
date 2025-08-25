@@ -1,0 +1,549 @@
+version: '3.8'
+
+services:
+  # ==================== 存储层 ====================
+  
+  # MinIO对象存储
+  minio:
+    image: minio/minio:RELEASE.2023-11-15T20-43-25Z
+    container_name: minio
+    hostname: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: minio123
+      MINIO_SERVER_URL: http://localhost:9000
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # Redis缓存
+  redis:
+    image: redis:7.2-alpine
+    container_name: redis
+    hostname: redis
+    ports:
+      - "6379:6379"
+    environment:
+      - REDIS_PASSWORD=redis123
+    volumes:
+      - redis_data:/data
+    command: redis-server --requirepass redis123 --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # ==================== 消息队列 ====================
+  
+  # Zookeeper
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    container_name: zookeeper
+    hostname: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_logs:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc localhost 2181 | grep imok"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # Kafka
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    container_name: kafka
+    hostname: kafka
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_JMX_PORT: 9101
+      KAFKA_JMX_HOSTNAME: localhost
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_DELETE_TOPIC_ENABLE: 'true'
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server localhost:9092 --list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # ==================== 数据仓库 ====================
+  
+  # Doris FE
+  doris-fe:
+    image: apache/doris:2.0.2-fe-x86_64
+    container_name: doris-fe
+    hostname: doris-fe
+    ports:
+      - "8030:8030"
+      - "9020:9020"
+      - "9030:9030"
+      - "9010:9010"
+    environment:
+      FE_SERVERS: doris-fe:9020
+      PRIORITY_NETWORKS: 172.16.0.0/12
+    volumes:
+      - doris_fe_data:/opt/apache-doris/fe/doris-meta
+    command: ["sh", "-c", "echo 'priority_networks = 172.16.0.0/12' >> /opt/apache-doris/fe/conf/fe.conf && /opt/apache-doris/fe/bin/start_fe.sh --daemon && tail -f /opt/apache-doris/fe/log/fe.log"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8030/api/bootstrap"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - bigdata-network
+
+  # Doris BE
+  doris-be:
+    image: apache/doris:2.0.2-be-x86_64
+    container_name: doris-be
+    hostname: doris-be
+    ports:
+      - "8040:8040"
+      - "8060:8060"
+      - "9050:9050"
+      - "9060:9060"
+    environment:
+      FE_SERVERS: doris-fe:9020
+      PRIORITY_NETWORKS: 172.16.0.0/12
+    volumes:
+      - doris_be_data:/opt/apache-doris/be/storage
+    command: ["sh", "-c", "echo 'priority_networks = 172.16.0.0/12' >> /opt/apache-doris/be/conf/be.conf && /opt/apache-doris/be/bin/start_be.sh --daemon && tail -f /opt/apache-doris/be/log/be.log"]
+    depends_on:
+      doris-fe:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8040/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - bigdata-network
+
+  # ==================== 流处理 ====================
+  
+  # ==================== 流处理和数据湖 ====================
+  
+  # Flink JobManager (集成Paimon)
+  flink-jobmanager:
+    image: flink:1.17.1
+    container_name: flink-jobmanager
+    hostname: flink-jobmanager
+    ports:
+      - "8081:8081"
+      - "6123:6123"
+    environment:
+      - FLINK_PROPERTIES=jobmanager.rpc.address:flink-jobmanager
+      - FLINK_PROPERTIES=state.backend:filesystem
+      - FLINK_PROPERTIES=state.checkpoints.dir:s3://bigdata-lake/checkpoints
+      - FLINK_PROPERTIES=s3.endpoint:http://minio:9000
+      - FLINK_PROPERTIES=s3.access-key:admin
+      - FLINK_PROPERTIES=s3.secret-key:minio123
+      - FLINK_PROPERTIES=s3.path.style:true
+      - FLINK_PROPERTIES=paimon.catalog.warehouse:s3://bigdata-lake/paimon
+      - FLINK_PROPERTIES=paimon.s3.endpoint:http://minio:9000
+      - FLINK_PROPERTIES=paimon.s3.access-key:admin
+      - FLINK_PROPERTIES=paimon.s3.secret-key:minio123
+      - FLINK_PROPERTIES=paimon.s3.path.style:true
+      - FLINK_PROPERTIES=table.dynamic-table-options.enabled:true
+      - FLINK_PROPERTIES=table.local-time-zone:Asia/Shanghai
+    volumes:
+      - ./config/flink:/opt/flink/conf
+      - ./config/paimon:/opt/flink/conf/paimon
+    command: jobmanager
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # Flink TaskManager (集成Paimon)
+  flink-taskmanager:
+    image: flink:1.17.1
+    container_name: flink-taskmanager
+    hostname: flink-taskmanager
+    ports:
+      - "6124:6124"
+      - "6125:6125"
+    environment:
+      - FLINK_PROPERTIES=jobmanager.rpc.address:flink-jobmanager
+      - FLINK_PROPERTIES=taskmanager.numberOfTaskSlots:2
+      - FLINK_PROPERTIES=state.backend:filesystem
+      - FLINK_PROPERTIES=state.checkpoints.dir:s3://bigdata-lake/checkpoints
+      - FLINK_PROPERTIES=s3.endpoint:http://minio:9000
+      - FLINK_PROPERTIES=s3.access-key:admin
+      - FLINK_PROPERTIES=s3.secret-key:minio123
+      - FLINK_PROPERTIES=s3.path.style:true
+      - FLINK_PROPERTIES=paimon.catalog.warehouse:s3://bigdata-lake/paimon
+      - FLINK_PROPERTIES=paimon.s3.endpoint:http://minio:9000
+      - FLINK_PROPERTIES=paimon.s3.access-key:admin
+      - FLINK_PROPERTIES=paimon.s3.secret-key:minio123
+      - FLINK_PROPERTIES=paimon.s3.path.style:true
+      - FLINK_PROPERTIES=table.dynamic-table-options.enabled:true
+      - FLINK_PROPERTIES=table.local-time-zone:Asia/Shanghai
+    volumes:
+      - ./config/flink:/opt/flink/conf
+      - ./config/paimon:/opt/flink/conf/paimon
+    command: taskmanager
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6124"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # Paimon Catalog Manager
+  paimon-catalog:
+    image: flink:1.17.1
+    container_name: paimon-catalog
+    hostname: paimon-catalog
+    environment:
+      - FLINK_PROPERTIES=jobmanager.rpc.address:flink-jobmanager
+      - FLINK_PROPERTIES=paimon.catalog.warehouse:s3://bigdata-lake/paimon
+      - FLINK_PROPERTIES=paimon.s3.endpoint:http://minio:9000
+      - FLINK_PROPERTIES=paimon.s3.access-key:admin
+      - FLINK_PROPERTIES=paimon.s3.secret-key:minio123
+      - FLINK_PROPERTIES=paimon.s3.path.style:true
+    volumes:
+      - ./config/paimon:/opt/flink/conf/paimon
+      - ./scripts:/scripts
+    command: ["sh", "-c", "echo 'Waiting for Flink to be ready...' && sleep 30 && /scripts/init-paimon.sh"]
+    depends_on:
+      flink-jobmanager:
+        condition: service_healthy
+    networks:
+      - bigdata-network
+
+  # ==================== 监控 ====================
+  
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: prometheus
+    hostname: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: grafana
+    hostname: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # ==================== 工作流调度 ====================
+  
+  # Airflow PostgreSQL
+  airflow-postgres:
+    image: postgres:13
+    container_name: airflow-postgres
+    hostname: airflow-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow123
+      - POSTGRES_DB=airflow
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # Airflow Redis
+  airflow-redis:
+    image: redis:7.2-alpine
+    container_name: airflow-redis
+    hostname: airflow-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - airflow_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # Airflow Webserver
+  airflow-webserver:
+    image: apache/airflow:2.7.1
+    container_name: airflow-webserver
+    hostname: airflow-webserver
+    ports:
+      - "8080:8080"
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow123@airflow-postgres:5432/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow123@airflow-postgres:5432/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@airflow-redis:6379/0
+      - AIRFLOW__CORE__FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__API__AUTH_BACKEND=airflow.api.auth.backend.basic_auth
+    volumes:
+      - airflow_dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - ./config/airflow:/opt/airflow/config
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-redis:
+        condition: service_healthy
+    command: webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    image: apache/airflow:2.7.1
+    container_name: airflow-scheduler
+    hostname: airflow-scheduler
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=CeleryExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://airflow:airflow123@airflow-postgres:5432/airflow
+      - AIRFLOW__CELERY__RESULT_BACKEND=db+postgresql://airflow:airflow123@airflow-postgres:5432/airflow
+      - AIRFLOW__CELERY__BROKER_URL=redis://:@airflow-redis:6379/0
+      - AIRFLOW__CORE__FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+      - AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=True
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+    volumes:
+      - airflow_dags:/opt/airflow/dags
+      - airflow_logs:/opt/airflow/logs
+      - ./config/airflow:/opt/airflow/config
+    depends_on:
+      airflow-webserver:
+        condition: service_healthy
+    command: scheduler
+    networks:
+      - bigdata-network
+
+  # ==================== 数据可视化 ====================
+  
+  # Superset PostgreSQL
+  superset-postgres:
+    image: postgres:13
+    container_name: superset-postgres
+    hostname: superset-postgres
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_USER=superset
+      - POSTGRES_PASSWORD=superset123
+      - POSTGRES_DB=superset
+    volumes:
+      - superset_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # Superset
+  superset:
+    image: apache/superset:2.1.0
+    container_name: superset
+    hostname: superset
+    ports:
+      - "8088:8088"
+    environment:
+      - SUPERSET_SECRET_KEY=your-secret-key-here
+      - SUPERSET_CONFIG_PATH=/app/pythonpath/superset_config.py
+    volumes:
+      - superset_data:/app/superset_home
+      - ./config/superset/superset_config.py:/app/pythonpath/superset_config.py
+    depends_on:
+      superset-postgres:
+        condition: service_healthy
+    command: ["sh", "-c", "superset db upgrade && superset fab create-admin --username admin --firstname Admin --lastname User --email admin@example.com --password admin123 && superset init && gunicorn --bind 0.0.0.0:8088 --workers 4 --timeout 120 --limit-request-line 0 --limit-request-field_size 0 superset.app:create_app()"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # ==================== 开发环境 ====================
+  
+  # JupyterHub
+  jupyterhub:
+    image: jupyterhub/jupyterhub:3.1.1
+    container_name: jupyterhub
+    hostname: jupyterhub
+    ports:
+      - "8000:8000"
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+    volumes:
+      - jupyterhub_data:/data
+      - ./config/jupyterhub/jupyterhub_config.py:/srv/jupyterhub/jupyterhub_config.py
+    command: jupyterhub -f /srv/jupyterhub/jupyterhub_config.py
+    depends_on:
+      - minio
+      - kafka
+      - doris-fe
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/hub/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - bigdata-network
+
+  # ==================== 工具服务 ====================
+  
+  # Kafka UI
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    hostname: kafka-ui
+    ports:
+      - "8082:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:29092
+      - KAFKA_CLUSTERS_0_ZOOKEEPER=zookeeper:2181
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - bigdata-network
+
+  # MinIO Client
+  minio-client:
+    image: minio/mc:latest
+    container_name: minio-client
+    hostname: minio-client
+    environment:
+      - MINIO_SERVER_URL=http://minio:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=minio123
+    volumes:
+      - ./scripts:/scripts
+    command: ["sh", "-c", "mc alias set myminio http://minio:9000 admin minio123 && mc mb myminio/bigdata-lake && mc mb myminio/ml-models && tail -f /dev/null"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - bigdata-network
+
+volumes:
+  minio_data:
+  redis_data:
+  zookeeper_data:
+  zookeeper_logs:
+  kafka_data:
+  doris_fe_data:
+  doris_be_data:
+  prometheus_data:
+  grafana_data:
+  airflow_postgres_data:
+  airflow_redis_data:
+  airflow_dags:
+  airflow_logs:
+  superset_postgres_data:
+  superset_data:
+  jupyterhub_data:
+
+networks:
+  bigdata-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.16.0.0/12 

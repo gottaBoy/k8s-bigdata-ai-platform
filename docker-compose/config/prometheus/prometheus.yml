@@ -1,0 +1,65 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Prometheus自身监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Flink监控
+  - job_name: 'flink-jobmanager'
+    static_configs:
+      - targets: ['flink-jobmanager:9249']
+    metrics_path: '/metrics'
+
+  - job_name: 'flink-taskmanager'
+    static_configs:
+      - targets: ['flink-taskmanager:9249']
+    metrics_path: '/metrics'
+
+  # Kafka监控
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka:9101']
+    metrics_path: '/metrics'
+
+  # MinIO监控
+  - job_name: 'minio'
+    static_configs:
+      - targets: ['minio:9000']
+    metrics_path: '/minio/v2/metrics/cluster'
+
+  # Redis监控
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+
+  # Airflow监控
+  - job_name: 'airflow-webserver'
+    static_configs:
+      - targets: ['airflow-webserver:8080']
+    metrics_path: '/metrics'
+
+  # Superset监控
+  - job_name: 'superset'
+    static_configs:
+      - targets: ['superset:8088']
+    metrics_path: '/health'
+
+  # JupyterHub监控
+  - job_name: 'jupyterhub'
+    static_configs:
+      - targets: ['jupyterhub:8000']
+    metrics_path: '/hub/api/health'
+
+  # 系统监控
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+    metrics_path: '/metrics' 
