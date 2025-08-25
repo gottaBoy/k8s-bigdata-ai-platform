@@ -1,0 +1,206 @@
+# Flink配置文件
+# 作者: 云原生专家
+# 版本: 1.0.0
+
+# ==================== 基础配置 ====================
+
+# JobManager配置
+jobmanager.rpc.address: flink-jobmanager
+jobmanager.rpc.port: 6123
+jobmanager.memory.process.size: 2048m
+jobmanager.memory.flink.size: 1536m
+jobmanager.memory.jvm-metaspace.size: 256m
+jobmanager.memory.jvm-overhead.min: 128m
+jobmanager.memory.jvm-overhead.max: 256m
+
+# TaskManager配置
+taskmanager.numberOfTaskSlots: 4
+taskmanager.memory.process.size: 4096m
+taskmanager.memory.flink.size: 3072m
+taskmanager.memory.managed.size: 1024m
+taskmanager.memory.jvm-metaspace.size: 512m
+taskmanager.memory.jvm-overhead.min: 256m
+taskmanager.memory.jvm-overhead.max: 512m
+
+# ==================== 状态后端配置 ====================
+
+# 文件系统状态后端
+state.backend: filesystem
+state.checkpoints.dir: s3://bigdata-lake/checkpoints
+state.savepoints.dir: s3://bigdata-lake/savepoints
+
+# S3配置
+s3.endpoint: http://minio:9000
+s3.access-key: admin
+s3.secret-key: minio123
+s3.path.style: true
+s3.region: us-east-1
+
+# ==================== Paimon配置 ====================
+
+# Paimon Catalog配置
+paimon.catalog.warehouse: s3://bigdata-lake/paimon
+paimon.s3.endpoint: http://minio:9000
+paimon.s3.access-key: admin
+paimon.s3.secret-key: minio123
+paimon.s3.path.style: true
+paimon.s3.region: us-east-1
+
+# Paimon表配置
+table.dynamic-table-options.enabled: true
+table.local-time-zone: Asia/Shanghai
+
+# ==================== 检查点配置 ====================
+
+# 检查点间隔
+execution.checkpointing.interval: 60s
+execution.checkpointing.timeout: 10min
+execution.checkpointing.min-pause: 5s
+execution.checkpointing.max-concurrent-checkpoints: 1
+execution.checkpointing.externalized-checkpoint-retention: RETAIN_ON_CANCELLATION
+
+# ==================== 重启策略 ====================
+
+# 固定延迟重启策略
+restart-strategy: fixed-delay
+restart-strategy.fixed-delay.attempts: 3
+restart-strategy.fixed-delay.delay: 30s
+
+# ==================== 网络配置 ====================
+
+# 网络缓冲区
+taskmanager.memory.network.fraction: 0.1
+taskmanager.memory.network.min: 64mb
+taskmanager.memory.network.max: 1gb
+
+# 网络超时
+taskmanager.network.request-backoff.initial: 100
+taskmanager.network.request-backoff.max: 10000
+taskmanager.network.request-backoff.base: 2
+
+# ==================== 并行度配置 ====================
+
+# 默认并行度
+parallelism.default: 4
+
+# 最大并行度
+parallelism.max: 16
+
+# ==================== 内存配置 ====================
+
+# 内存管理
+taskmanager.memory.managed.fraction: 0.4
+taskmanager.memory.managed.size: 1024m
+
+# 堆内存
+taskmanager.memory.jvm-heap.size: 2048m
+
+# 直接内存
+taskmanager.memory.jvm-direct.size: 1024m
+
+# ==================== 日志配置 ====================
+
+# 日志级别
+rootLogger.level: INFO
+logger.akka.level: WARN
+logger.kafka.level: WARN
+logger.hadoop.level: WARN
+logger.zookeeper.level: WARN
+
+# 日志文件
+env.java.opts: -Dlog.file=/opt/flink/log/flink.log
+
+# ==================== 高可用配置 ====================
+
+# 高可用模式
+high-availability: zookeeper
+high-availability.storageDir: s3://bigdata-lake/ha
+high-availability.zookeeper.quorum: zookeeper:2181
+high-availability.zookeeper.path.root: /flink
+high-availability.cluster-id: /default
+
+# ==================== 安全配置 ====================
+
+# Kerberos配置（可选）
+# security.kerberos.login.keytab: /path/to/keytab
+# security.kerberos.login.principal: flink@REALM
+
+# ==================== 监控配置 ====================
+
+# Metrics配置
+metrics.reporter.prom.class: org.apache.flink.metrics.prometheus.PrometheusReporter
+metrics.reporter.prom.port: 9249
+metrics.reporter.prom.interval: 15s
+
+# ==================== SQL配置 ====================
+
+# SQL客户端配置
+sql-client.execution.result-mode: table
+sql-client.execution.max-table-result-rows: 1000
+sql-client.verbose: true
+
+# 表配置
+table.exec.mini-batch.enabled: true
+table.exec.mini-batch.size: 1000
+table.exec.mini-batch.allow-latency: 1s
+table.optimizer.agg-phase-strategy: TWO_PHASE
+
+# ==================== 连接器配置 ====================
+
+# Kafka连接器配置
+table.connector.kafka.properties.bootstrap.servers: kafka:29092
+table.connector.kafka.properties.group.id: flink-group
+
+# JDBC连接器配置
+table.connector.jdbc.url: jdbc:mysql://doris-fe:9030/bigdata_platform
+table.connector.jdbc.username: root
+table.connector.jdbc.password: root
+
+# ==================== 性能优化配置 ====================
+
+# 批处理优化
+table.exec.resource.default-parallelism: 4
+table.exec.mini-batch.allow-latency: 1s
+table.exec.mini-batch.size: 1000
+
+# 流处理优化
+pipeline.name: Flink-Paimon-Streaming
+pipeline.jars: /opt/flink/lib/paimon-flink-1.17-0.6.0-incubating.jar
+
+# ==================== 容错配置 ====================
+
+# 故障转移
+jobmanager.execution.failover-strategy: region
+jobmanager.execution.failover-region.strategy: full
+
+# 状态TTL
+state.retention.time: 7d
+state.retention.max-size: 10gb
+
+# ==================== 资源管理配置 ====================
+
+# 资源管理
+taskmanager.memory.managed.fraction: 0.4
+taskmanager.memory.managed.size: 1024m
+
+# 网络缓冲区
+taskmanager.memory.network.fraction: 0.1
+taskmanager.memory.network.min: 64mb
+taskmanager.memory.network.max: 1gb
+
+# ==================== 开发调试配置 ====================
+
+# 开发模式
+execution.checkpointing.interval: 10s
+execution.checkpointing.timeout: 5min
+
+# 调试模式
+env.java.opts: -Dlog.file=/opt/flink/log/flink.log -Dlog.level=DEBUG
+
+# ==================== 生产环境配置 ====================
+
+# 生产环境优化
+# execution.checkpointing.interval: 300s
+# execution.checkpointing.timeout: 20min
+# taskmanager.memory.process.size: 8192m
+# jobmanager.memory.process.size: 4096m 
